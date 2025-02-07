@@ -17,20 +17,22 @@ contract = web3.eth.contract(address=contract_address, abi=contract_abi)
 # Private key for signing transactions
 private_key = "0xYourPrivateKey"
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/webhook', methods=['POST']) # this is postman ... we b2.0
 def flight_event_webhook():
     data = request.json
     flight_id = data['flight_id']
     event = data['event']
     timestamp = int(data['timestamp'])
 
+
+    # call the smart contract
     # Build transaction
     tx = contract.functions.updateFlightEvent(flight_id, event, timestamp).buildTransaction({
         'gas': 200000,
         'nonce': web3.eth.getTransactionCount(web3.eth.defaultAccount),
     })
 
-    # Sign and send transaction
+    # Sign and send transaction execute the contract
     signed_tx = web3.eth.account.signTransaction(tx, private_key=private_key)
     tx_hash = web3.eth.sendRawTransaction(signed_tx.rawTransaction)
     
