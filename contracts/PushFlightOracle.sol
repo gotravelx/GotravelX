@@ -19,7 +19,7 @@ contract PushFlightOracle {
         oracle = msg.sender;
     }
     function registerFlight(string memory flightId) public onlyOracle {
-        require(!flights[flightId].exists, "Flight already registered");
+        require(!flights[flightId].exists, "Flight already registered"); // q1: which flights for gtx clients are subscribed to
         flights[flightId] = Flight({
             exists: true,
             hasTakenOff: false,
