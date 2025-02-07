@@ -37,6 +37,6 @@ contract PushFlightOracle {
             flights[flightId].hasLanded = true;
             flights[flightId].landingTime = timestamp;
         }
-        emit FlightUpdated(flightId, eventType, timestamp);
+        emit FlightUpdated(flightId, eventType, timestamp); // mask , make the data so that only subscribers can see it
     }
 }
