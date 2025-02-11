@@ -1,181 +1,128 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
 
-contract FlightBooking {
-    struct Flight {
-        uint256 id;
-        string origin;
-        string destination;
-        uint256 departureTime;
-        uint256 price;
-        uint256 availableSeats;
+pragma solidity 0.8.19;
+
+contract FlightStatusOracle {
+    uint256 private constant ORACLE_PAYMENT = (1 *100) / 10; // 0.1 LINK
+
+    struct FlightData {
+        string estimatedArrivalUTC;
+        string estimatedDepartureUTC;
+        string arrivalCity;
+        string departureCity;
+        string operatingAirline;
+        string flightNumber;
+        string departureGate;
+        string arrivalGate;
+        string flightStatus;
+        string equipmentModel;
+        bool exists;
     }
 
-    struct Booking {
-        uint256 bookingId;
-        uint256 flightId;
-        address passenger;
-        uint256 amountPaid;
-        uint256 bookingTime;
-        bool isCancelled;
-    }
+    mapping(string => FlightData) public flights;
+    mapping(address => uint256) public subscriptions;
+    string[] public flightNumbers;
 
-    uint256 public flightCounter;
-    uint256 public bookingCounter;
-    address public owner;
-
-    mapping(uint256 => Flight) private flights;
-    mapping(uint256 => Booking) private bookings;
-    mapping(address => uint256[]) private passengerBookings;
-
-    event FlightAdded(
-        uint256 flightId,
-        string origin,
-        string destination,
-        uint256 departureTime,
-        uint256 price,
-        uint256 availableSeats
+    event FlightDataSet(
+        string flightNumber,
+        string estimatedArrivalUTC,
+        string estimatedDepartureUTC,
+        string arrivalCity,
+        string departureCity,
+        string operatingAirline,
+        string departureGate,
+        string arrivalGate,
+        string flightStatus,
+        string equipmentModel
     );
-    event FlightBooked(
-        uint256 bookingId,
-        uint256 flightId,
-        address passenger,
-        uint256 amountPaid
-    );
-    event BookingCancelled(uint256 bookingId, address passenger);
-    event FundsWithdrawn(address owner, uint256 amount);
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only the owner can perform this action");
-        _;
-    }
+    event Subscribed(address indexed user, uint256 expiry);
 
-    modifier flightExists(uint256 flightId) {
-        require(flights[flightId].id != 0, "Flight does not exist");
-        _;
-    }
+    constructor() {}
 
-    modifier bookingExists(uint256 bookingId) {
-        require(bookings[bookingId].bookingId != 0, "Booking does not exist");
-        _;
-    }
+    function setFlightData(
+        string memory flightNumber,
+        string memory estimatedArrivalUTC,
+        string memory estimatedDepartureUTC,
+        string memory arrivalCity,
+        string memory departureCity,
+        string memory operatingAirline,
+        string memory departureGate,
+        string memory arrivalGate,
+        string memory flightStatus,
+        string memory equipmentModel
+    ) public {
+        if (!flights[flightNumber].exists) {
+            flightNumbers.push(flightNumber);
+        }
 
-    constructor() {
-        owner = msg.sender;
-    }
+        flights[flightNumber] = FlightData({
+            estimatedArrivalUTC: estimatedArrivalUTC,
+            estimatedDepartureUTC: estimatedDepartureUTC,
+            arrivalCity: arrivalCity,
+            departureCity: departureCity,
+            operatingAirline: operatingAirline,
+            flightNumber: flightNumber,
+            departureGate: departureGate,
+            arrivalGate: arrivalGate,
+            flightStatus: flightStatus,
+            equipmentModel: equipmentModel,
+            exists: true
+        });
 
-    function addFlight(
-        string memory origin,
-        string memory destination,
-        uint256 departureTime,
-        uint256 price,
-        uint256 availableSeats
-    ) external onlyOwner {
-        require(
-            departureTime > block.timestamp,
-            "Departure time must be in the future"
-        );
-        require(
-            availableSeats > 0,
-            "Available seats must be greater than zero"
-        );
-
-        flightCounter++;
-        flights[flightCounter] = Flight(
-            flightCounter,
-            origin,
-            destination,
-            departureTime,
-            price,
-            availableSeats
-        );
-
-        emit FlightAdded(
-            flightCounter,
-            origin,
-            destination,
-            departureTime,
-            price,
-            availableSeats
+        emit FlightDataSet(
+            flightNumber,
+            estimatedArrivalUTC,
+            estimatedDepartureUTC,
+            arrivalCity,
+            departureCity,
+            operatingAirline,
+            departureGate,
+            arrivalGate,
+            flightStatus,
+            equipmentModel
         );
     }
 
-    function bookFlight(uint256 flightId)
-        external
-        payable
-        flightExists(flightId)
-    {
-        Flight storage flight = flights[flightId];
-        require(flight.availableSeats > 0, "No seats available on this flight");
-        require(msg.value >= flight.price, "Insufficient payment");
-
-        flight.availableSeats--;
-
-        bookingCounter++;
-        bookings[bookingCounter] = Booking(
-            bookingCounter,
-            flightId,
-            msg.sender,
-            msg.value,
-            block.timestamp,
-            false
-        );
-        passengerBookings[msg.sender].push(bookingCounter);
-
-        emit FlightBooked(bookingCounter, flightId, msg.sender, msg.value);
+    function subscribe(uint256 months) public payable {
+        require(months > 0, "Subscription must be for at least 1 month");
+        uint256 expiry = block.timestamp + (months * 30 days);
+        subscriptions[msg.sender] = expiry;
+        emit Subscribed(msg.sender, expiry);
     }
 
-    function cancelBooking(uint256 bookingId)
-        external
-        bookingExists(bookingId)
-    {
-        Booking storage booking = bookings[bookingId];
-        require(
-            booking.passenger == msg.sender,
-            "You can only cancel your own booking"
-        );
-        require(!booking.isCancelled, "Booking is already cancelled");
-
-        booking.isCancelled = true;
-        flights[booking.flightId].availableSeats++;
-
-        payable(booking.passenger).transfer(booking.amountPaid);
-
-        emit BookingCancelled(bookingId, msg.sender);
-    }
-
-    function withdrawFunds() external onlyOwner {
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No funds available to withdraw");
-
-        payable(owner).transfer(balance);
-
-        emit FundsWithdrawn(owner, balance);
-    }
-
-    function getPassengerBookings(address passenger)
-        external
+    function getFlightData(string memory flightNumber)
+        public
         view
-        returns (uint256[] memory)
+        returns (
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            string memory,
+            bool
+        )
     {
-        return passengerBookings[passenger];
-    }
-
-    function getFlightDetails(uint256 flightId)
-        external
-        view
-        flightExists(flightId)
-        returns (Flight memory)
-    {
-        return flights[flightId];
-    }
-
-    function getBookingDetails(uint256 bookingId)
-        external
-        view
-        bookingExists(bookingId)
-        returns (Booking memory)
-    {
-        return bookings[bookingId];
+        require(subscriptions[msg.sender] > block.timestamp, "Subscription expired or not active");
+        FlightData storage flight = flights[flightNumber];
+        require(flight.exists, "Flight data not found");
+        return (
+            flight.estimatedArrivalUTC,
+            flight.estimatedDepartureUTC,
+            flight.arrivalCity,
+            flight.departureCity,
+            flight.operatingAirline,
+            flight.flightNumber,
+            flight.departureGate,
+            flight.arrivalGate,
+            flight.flightStatus,
+            flight.equipmentModel,
+            flight.exists
+        );
     }
 }
