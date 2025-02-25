@@ -3,89 +3,94 @@ pragma solidity 0.8.19;
 
 contract FlightStatusOracle {
     struct FlightData {
-        string estimatedArrivalUTC;
-        string estimatedDepartureUTC;
+        string flightNumber;
+        string ArrivalUTC;
+        string DepartureUTC;
         string arrivalCity;
         string departureCity;
         string operatingAirline;
-        string flightNumber;
-        string departureGate;
         string arrivalGate;
+        string departureGate;
         string flightStatus;
         string equipmentModel;
-        bool exists;
+    }
+
+    struct statuss {
+        string flightStatusCode;
+        string flightStatusDescription;
+        string outUtc;
+        string offUtc;
+        string onUtc;
+        string inUtc;
     }
 
     mapping(string => FlightData) public flights;
+    mapping(string => statuss) public checkFlightStatus;
     mapping(address => uint256) public subscriptions;
     string[] public flightNumbers;
 
     event FlightDataSet(
         string flightNumber,
-        string estimatedArrivalUTC,
-        string estimatedDepartureUTC,
+        string ArrivalUTC,
+        string DepartureUTC,
         string arrivalCity,
         string departureCity,
         string operatingAirline,
-        string departureGate,
         string arrivalGate,
+        string departureGate,
         string flightStatus,
         string equipmentModel
     );
 
     event Subscribed(address indexed user, uint256 expiry);
-    event FlightDataUpdated(
+    event FlightStatusUpdated(
         string flightNumber,
-        string[] fieldsUpdated,
-        string[] newValues
+        string flight_times,
+        string status
     );
 
     constructor() {}
 
-    function compareStrings(string memory a, string memory b)
-        internal
-        pure
-        returns (bool)
-    {
-        return keccak256(abi.encodePacked(a)) == keccak256(abi.encodePacked(b));
-    }
-
     function setFlightData(
         string memory flightNumber,
-        string memory estimatedArrivalUTC,
-        string memory estimatedDepartureUTC,
+        string memory ArrivalUTC,
+        string memory DepartureUTC,
         string memory arrivalCity,
         string memory departureCity,
         string memory operatingAirline,
-        string memory departureGate,
         string memory arrivalGate,
+        string memory departureGate,
         string memory flightStatus,
-        string memory equipmentModel
+        string memory equipmentModel,
+        string[] memory data
     ) public {
-        require(
-            !flights[flightNumber].exists,
-            "Flight already exists. Use updateFlightData."
-        );
-
         flightNumbers.push(flightNumber);
         flights[flightNumber] = FlightData({
-            estimatedArrivalUTC: estimatedArrivalUTC,
-            estimatedDepartureUTC: estimatedDepartureUTC,
+            flightNumber: flightNumber,
+            ArrivalUTC: ArrivalUTC,
+            DepartureUTC: DepartureUTC,
             arrivalCity: arrivalCity,
             departureCity: departureCity,
             operatingAirline: operatingAirline,
-            flightNumber: flightNumber,
-            departureGate: departureGate,
             arrivalGate: arrivalGate,
+            departureGate: departureGate,
             flightStatus: flightStatus,
-            equipmentModel: equipmentModel,
-            exists: true
+            equipmentModel: equipmentModel
+        });
+
+        checkFlightStatus[flightNumber] = statuss({
+            flightStatusCode: data[0],
+            flightStatusDescription: data[1],
+            outUtc: data[2],
+            offUtc: data[3],
+            onUtc: data[4],
+            inUtc: data[5]
         });
 
         emit FlightDataSet(
             flightNumber,
-            estimatedArrivalUTC,
-            estimatedDepartureUTC,
+            ArrivalUTC,
+            DepartureUTC,
             arrivalCity,
             departureCity,
             operatingAirline,
@@ -105,102 +110,99 @@ contract FlightStatusOracle {
             subscriptions[msg.sender] > block.timestamp,
             "You are not a subscribed user or subscription expired"
         );
-        require(flights[flightNumber].exists, "Flight data not found");
         return flights[flightNumber];
     }
 
-    function updateFlightData(
-        string memory flightNumber,
-        string memory estimatedArrivalUTC,
-        string memory estimatedDepartureUTC,
-        string memory arrivalCity,
-        string memory departureCity,
-        string memory operatingAirline,
-        string memory departureGate,
-        string memory arrivalGate,
-        string memory flightStatus,
-        string memory equipmentModel
-    ) public {
-        require(
-            flights[flightNumber].exists,
-            "Flight does not exist. Use setFlightData."
-        );
+    function getFlightStatus(string memory flightNumber)
+        public
+        returns (string memory)
+    {
+        statuss memory status = checkFlightStatus[flightNumber];
+        string memory newStatus;
 
-        FlightData storage flight = flights[flightNumber];
-        string[] memory fieldsToUpdate = new string[](9);
-        string[] memory newValues = new string[](9);
-        uint256 updateCount = 0;
-
-        if (!compareStrings(flight.estimatedArrivalUTC, estimatedArrivalUTC)) {
-            fieldsToUpdate[updateCount] = "estimatedArrivalUTC";
-            newValues[updateCount] = estimatedArrivalUTC;
-            flight.estimatedArrivalUTC = estimatedArrivalUTC;
-            updateCount++;
-        }
         if (
-            !compareStrings(flight.estimatedDepartureUTC, estimatedDepartureUTC)
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("NDPT"))
         ) {
-            fieldsToUpdate[updateCount] = "estimatedDepartureUTC";
-            newValues[updateCount] = estimatedDepartureUTC;
-            flight.estimatedDepartureUTC = estimatedDepartureUTC;
-            updateCount++;
-        }
-        if (!compareStrings(flight.arrivalCity, arrivalCity)) {
-            fieldsToUpdate[updateCount] = "arrivalCity";
-            newValues[updateCount] = arrivalCity;
-            flight.arrivalCity = arrivalCity;
-            updateCount++;
-        }
-        if (!compareStrings(flight.departureCity, departureCity)) {
-            fieldsToUpdate[updateCount] = "departureCity";
-            newValues[updateCount] = departureCity;
-            flight.departureCity = departureCity;
-            updateCount++;
-        }
-        if (!compareStrings(flight.operatingAirline, operatingAirline)) {
-            fieldsToUpdate[updateCount] = "operatingAirline";
-            newValues[updateCount] = operatingAirline;
-            flight.operatingAirline = operatingAirline;
-            updateCount++;
-        }
-        if (!compareStrings(flight.departureGate, departureGate)) {
-            fieldsToUpdate[updateCount] = "departureGate";
-            newValues[updateCount] = departureGate;
-            flight.departureGate = departureGate;
-            updateCount++;
-        }
-        if (!compareStrings(flight.arrivalGate, arrivalGate)) {
-            fieldsToUpdate[updateCount] = "arrivalGate";
-            newValues[updateCount] = arrivalGate;
-            flight.arrivalGate = arrivalGate;
-            updateCount++;
-        }
-        if (!compareStrings(flight.flightStatus, flightStatus)) {
-            fieldsToUpdate[updateCount] = "flightStatus";
-            newValues[updateCount] = flightStatus;
-            flight.flightStatus = flightStatus;
-            updateCount++;
-        }
-        if (!compareStrings(flight.equipmentModel, equipmentModel)) {
-            fieldsToUpdate[updateCount] = "equipmentModel";
-            newValues[updateCount] = equipmentModel;
-            flight.equipmentModel = equipmentModel;
-            updateCount++;
-        }
-
-        if (updateCount > 0) {
-            string[] memory trimmedFields = new string[](updateCount);
-            string[] memory trimmedValues = new string[](updateCount);
-            for (uint256 i = 0; i < updateCount; i++) {
-                trimmedFields[i] = fieldsToUpdate[i];
-                trimmedValues[i] = newValues[i];
-            }
-            emit FlightDataUpdated(
-                flight.flightNumber,
-                trimmedFields,
-                trimmedValues
+            newStatus = "Not Departed";
+            emit FlightStatusUpdated(flightNumber, "", "Not Departed");
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("CNCL"))
+        ) {
+            newStatus = "Cancelled";
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Cancelled");
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("OUT"))
+        ) {
+            newStatus = "Departed";
+            emit FlightStatusUpdated(
+                flightNumber,
+                status.outUtc,
+                "Departed"
+            );
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("RTBL"))
+        ) {
+            newStatus = "Return To Gate";
+            emit FlightStatusUpdated(
+                flightNumber,
+                status.outUtc,
+                "Return To Gate"
+            );
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("OFF"))
+        ) {
+            newStatus = "In Flight";
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
+            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("RTFL"))
+        ) {
+            newStatus = "Return To Airport";
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
+            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
+            emit FlightStatusUpdated(
+                flightNumber,
+                status.onUtc,
+                "Return To Airport"
+            );
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("DVRT"))
+        ) {
+            newStatus = "Diverted";
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
+            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
+            emit FlightStatusUpdated(flightNumber, status.onUtc, "Diverted");
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("ON"))
+        ) {
+            newStatus = "Landed";
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
+            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
+            emit FlightStatusUpdated(flightNumber, status.onUtc, "Landed");
+        } else if (
+            keccak256(abi.encodePacked(status.flightStatusCode)) ==
+            keccak256(abi.encodePacked("IN"))
+        ) {
+            newStatus = "Arrived At Gate";
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
+            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
+            emit FlightStatusUpdated(flightNumber, status.onUtc, "Landed");
+            emit FlightStatusUpdated(
+                flightNumber,
+                status.inUtc,
+                "Arrived At Gate"
             );
         }
+
+        return newStatus;
     }
 
     function subscribe(uint256 months) public payable {
