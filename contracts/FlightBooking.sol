@@ -4,8 +4,6 @@ pragma solidity 0.8.19;
 contract FlightStatusOracle {
     struct FlightData {
         string flightNumber;
-        string ArrivalUTC;
-        string DepartureUTC;
         string arrivalCity;
         string departureCity;
         string operatingAirline;
@@ -13,6 +11,15 @@ contract FlightStatusOracle {
         string departureGate;
         string flightStatus;
         string equipmentModel;
+    }
+
+    struct UtcTime {
+        string ArrivalUTC;
+        string DepartureUTC;
+        string estimatedArrivalUTC;
+        string estimatedDepartureUTC;
+        string scheduledArrivalUTC;
+        string scheduledDepartureUTC;
     }
 
     struct statuss {
@@ -25,14 +32,13 @@ contract FlightStatusOracle {
     }
 
     mapping(string => FlightData) public flights;
+    mapping(string => UtcTime) public UtcTimes;
     mapping(string => statuss) public checkFlightStatus;
     mapping(address => uint256) public subscriptions;
     string[] public flightNumbers;
 
     event FlightDataSet(
         string flightNumber,
-        string ArrivalUTC,
-        string DepartureUTC,
         string arrivalCity,
         string departureCity,
         string operatingAirline,
@@ -40,6 +46,15 @@ contract FlightStatusOracle {
         string departureGate,
         string flightStatus,
         string equipmentModel
+    );
+
+    event UTCTimeSet(
+        string ArrivalUTC,
+        string DepartureUTC,
+        string estimatedArrivalUTC,
+        string estimatedDepartureUTC,
+        string scheduledArrivalUTC,
+        string scheduledDepartureUTC
     );
 
     event Subscribed(address indexed user, uint256 expiry);
@@ -52,52 +67,59 @@ contract FlightStatusOracle {
     constructor() {}
 
     function setFlightData(
-        string memory flightNumber,
-        string memory ArrivalUTC,
-        string memory DepartureUTC,
-        string memory arrivalCity,
-        string memory departureCity,
-        string memory operatingAirline,
-        string memory arrivalGate,
-        string memory departureGate,
-        string memory flightStatus,
-        string memory equipmentModel,
-        string[] memory data
+        string[] memory flightdata,
+        string[] memory Utctimes,
+        string[] memory status
     ) public {
-        flightNumbers.push(flightNumber);
-        flights[flightNumber] = FlightData({
-            flightNumber: flightNumber,
-            ArrivalUTC: ArrivalUTC,
-            DepartureUTC: DepartureUTC,
-            arrivalCity: arrivalCity,
-            departureCity: departureCity,
-            operatingAirline: operatingAirline,
-            arrivalGate: arrivalGate,
-            departureGate: departureGate,
-            flightStatus: flightStatus,
-            equipmentModel: equipmentModel
+        flightNumbers.push(flightdata[0]);
+
+        flights[flightdata[0]] = FlightData({
+            flightNumber: flightdata[0],
+            arrivalCity: flightdata[1],
+            departureCity: flightdata[2],
+            operatingAirline: flightdata[3],
+            arrivalGate: flightdata[4],
+            departureGate: flightdata[5],
+            flightStatus: flightdata[6],
+            equipmentModel: flightdata[7]
         });
 
-        checkFlightStatus[flightNumber] = statuss({
-            flightStatusCode: data[0],
-            flightStatusDescription: data[1],
-            outUtc: data[2],
-            offUtc: data[3],
-            onUtc: data[4],
-            inUtc: data[5]
+        UtcTimes[flightdata[0]] = UtcTime({
+            ArrivalUTC: Utctimes[0],
+            DepartureUTC: Utctimes[1],
+            estimatedArrivalUTC: Utctimes[2],
+            estimatedDepartureUTC: Utctimes[3],
+            scheduledArrivalUTC: Utctimes[4],
+            scheduledDepartureUTC: Utctimes[5]
+        });
+
+        checkFlightStatus[flightdata[0]] = statuss({
+            flightStatusCode: status[0],
+            flightStatusDescription: status[1],
+            outUtc: status[2],
+            offUtc: status[3],
+            onUtc: status[4],
+            inUtc: status[5]
         });
 
         emit FlightDataSet(
-            flightNumber,
-            ArrivalUTC,
-            DepartureUTC,
-            arrivalCity,
-            departureCity,
-            operatingAirline,
-            departureGate,
-            arrivalGate,
-            flightStatus,
-            equipmentModel
+            flightdata[0],
+            flightdata[1],
+            flightdata[2],
+            flightdata[3],
+            flightdata[4],
+            flightdata[5],
+            flightdata[6],
+            flightdata[7]
+        );
+
+        emit UTCTimeSet(
+            Utctimes[0],
+            Utctimes[1],
+            Utctimes[2],
+            Utctimes[3],
+            Utctimes[4],
+            Utctimes[5]
         );
     }
 
@@ -117,6 +139,10 @@ contract FlightStatusOracle {
         public
         returns (string memory)
     {
+        require(
+            subscriptions[msg.sender] > block.timestamp,
+            "You are not a subscribed user or subscription expired"
+        );
         statuss memory status = checkFlightStatus[flightNumber];
         string memory newStatus;
 
@@ -137,11 +163,7 @@ contract FlightStatusOracle {
             keccak256(abi.encodePacked("OUT"))
         ) {
             newStatus = "Departed";
-            emit FlightStatusUpdated(
-                flightNumber,
-                status.outUtc,
-                "Departed"
-            );
+            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("RTBL"))
