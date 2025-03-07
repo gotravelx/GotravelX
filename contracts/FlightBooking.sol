@@ -4,9 +4,13 @@ pragma solidity 0.8.19;
 contract FlightStatusOracle {
     struct FlightData {
         string flightNumber;
+        string scheduledDepartureDate;
+        string carrierCode;
         string arrivalCity;
         string departureCity;
-        string operatingAirline;
+        string arrivalAirport;
+        string departureAirport;
+        string operatingAirlineCode;
         string arrivalGate;
         string departureGate;
         string flightStatus;
@@ -14,8 +18,8 @@ contract FlightStatusOracle {
     }
 
     struct UtcTime {
-        string ArrivalUTC;
-        string DepartureUTC;
+        string actualArrivalUTC;
+        string actualDepartureUTC;
         string estimatedArrivalUTC;
         string estimatedDepartureUTC;
         string scheduledArrivalUTC;
@@ -31,17 +35,26 @@ contract FlightStatusOracle {
         string inUtc;
     }
 
-    mapping(string => FlightData) public flights;
-    mapping(string => UtcTime) public UtcTimes;
-    mapping(string => statuss) public checkFlightStatus;
-    mapping(address => uint256) public subscriptions;
+    mapping(string => mapping(string => mapping(string => FlightData)))
+        public flights;
+    mapping(string => mapping(string => mapping(string => UtcTime)))
+        public UtcTimes;
+    mapping(string => mapping(string => mapping(string => statuss)))
+        public checkFlightStatus;
+    mapping(string => mapping(string => mapping(string => mapping(string => bool))))
+        public subscriptions;
+    mapping(string => bool) public isFlightExist;
     string[] public flightNumbers;
 
     event FlightDataSet(
         string flightNumber,
+        string scheduledDepartureDate,
+        string carrierCode,
         string arrivalCity,
         string departureCity,
-        string operatingAirline,
+        string arrivalAirport,
+        string departureAirport,
+        string operatingAirlineCode,
         string arrivalGate,
         string departureGate,
         string flightStatus,
@@ -49,51 +62,67 @@ contract FlightStatusOracle {
     );
 
     event UTCTimeSet(
-        string ArrivalUTC,
-        string DepartureUTC,
+        string actualArrivalUTC,
+        string actualDepartureUTC,
         string estimatedArrivalUTC,
         string estimatedDepartureUTC,
         string scheduledArrivalUTC,
         string scheduledDepartureUTC
     );
 
-    event Subscribed(address indexed user, uint256 expiry);
-    event FlightStatusUpdated(
+    event SubscriptionDetails(
         string flightNumber,
+        address indexed user,
+        string carrierCode,
+        string scheduledDepartureDate,
+        string departureAirport,
+        bool isSubscribe
+    );
+    event currentFlightStatus(
+        string flightNumber,
+        string scheduledDepartureDate,
         string flight_times,
-        string status
+        string carrierCode,
+        string status,
+        string statusCode
     );
 
     constructor() {}
 
-    function setFlightData(
+    function insertFlightDetails(
         string[] memory flightdata,
         string[] memory Utctimes,
         string[] memory status
     ) public {
         flightNumbers.push(flightdata[0]);
-
-        flights[flightdata[0]] = FlightData({
+        isFlightExist[flightdata[0]] = true;
+        flights[flightdata[0]][flightdata[1]][flightdata[2]] = FlightData({
             flightNumber: flightdata[0],
-            arrivalCity: flightdata[1],
-            departureCity: flightdata[2],
-            operatingAirline: flightdata[3],
-            arrivalGate: flightdata[4],
-            departureGate: flightdata[5],
-            flightStatus: flightdata[6],
-            equipmentModel: flightdata[7]
+            scheduledDepartureDate: flightdata[1],
+            carrierCode: flightdata[2],
+            arrivalCity: flightdata[3],
+            departureCity: flightdata[4],
+            arrivalAirport: flightdata[5],
+            departureAirport: flightdata[6],
+            operatingAirlineCode: flightdata[7],
+            arrivalGate: flightdata[8],
+            departureGate: flightdata[9],
+            flightStatus: flightdata[10],
+            equipmentModel: flightdata[11]
         });
 
-        UtcTimes[flightdata[0]] = UtcTime({
-            ArrivalUTC: Utctimes[0],
-            DepartureUTC: Utctimes[1],
+        UtcTimes[flightdata[0]][flightdata[1]][flightdata[2]] = UtcTime({
+            actualArrivalUTC: Utctimes[0],
+            actualDepartureUTC: Utctimes[1],
             estimatedArrivalUTC: Utctimes[2],
             estimatedDepartureUTC: Utctimes[3],
             scheduledArrivalUTC: Utctimes[4],
             scheduledDepartureUTC: Utctimes[5]
         });
 
-        checkFlightStatus[flightdata[0]] = statuss({
+        checkFlightStatus[flightdata[0]][flightdata[1]][
+            flightdata[2]
+        ] = statuss({
             flightStatusCode: status[0],
             flightStatusDescription: status[1],
             outUtc: status[2],
@@ -110,7 +139,11 @@ contract FlightStatusOracle {
             flightdata[4],
             flightdata[5],
             flightdata[6],
-            flightdata[7]
+            flightdata[7],
+            flightdata[8],
+            flightdata[9],
+            flightdata[10],
+            flightdata[11]
         );
 
         emit UTCTimeSet(
@@ -123,27 +156,40 @@ contract FlightStatusOracle {
         );
     }
 
-    function getFlightData(string memory flightNumber)
-        public
-        view
-        returns (FlightData memory)
-    {
+    function getFlightDetails(
+        string memory flightNumber,
+        string memory scheduledDepartureDate,
+        string memory carrierCode
+    ) public view returns (FlightData memory) {
+        string memory departureAirport = flights[flightNumber][
+            scheduledDepartureDate
+        ][carrierCode].departureAirport;
         require(
-            subscriptions[msg.sender] > block.timestamp,
-            "You are not a subscribed user or subscription expired"
+            subscriptions[flightNumber][carrierCode][departureAirport][
+                scheduledDepartureDate
+            ] == true,
+            "You are not a subscribed user"
         );
-        return flights[flightNumber];
+        return flights[flightNumber][scheduledDepartureDate][carrierCode];
     }
 
-    function getFlightStatus(string memory flightNumber)
-        public
-        returns (string memory)
-    {
+    function getFlightStatus(
+        string memory flightNumber,
+        string memory scheduledDepartureDate,
+        string memory carrierCode
+    ) public returns (string memory) {
+        string memory departureAirport = flights[flightNumber][
+            scheduledDepartureDate
+        ][carrierCode].departureAirport;
         require(
-            subscriptions[msg.sender] > block.timestamp,
-            "You are not a subscribed user or subscription expired"
+            subscriptions[flightNumber][carrierCode][departureAirport][
+                scheduledDepartureDate
+            ] == true,
+            "You are not a subscribed user"
         );
-        statuss memory status = checkFlightStatus[flightNumber];
+        statuss memory status = checkFlightStatus[flightNumber][
+            scheduledDepartureDate
+        ][carrierCode];
         string memory newStatus;
 
         if (
@@ -151,86 +197,254 @@ contract FlightStatusOracle {
             keccak256(abi.encodePacked("NDPT"))
         ) {
             newStatus = "Not Departed";
-            emit FlightStatusUpdated(flightNumber, "", "Not Departed");
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                "",
+                carrierCode,
+                "Not Departed",
+                "NDPT"
+            );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("CNCL"))
         ) {
             newStatus = "Cancelled";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Cancelled");
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Cancelled",
+                "CNCL"
+            );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("OUT"))
         ) {
             newStatus = "Departed";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Departed",
+                "OUT"
+            );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("RTBL"))
         ) {
             newStatus = "Return To Gate";
-            emit FlightStatusUpdated(
+            emit currentFlightStatus(
                 flightNumber,
+                scheduledDepartureDate,
                 status.outUtc,
-                "Return To Gate"
+                carrierCode,
+                "Return To Gate",
+                "RTBL"
             );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("OFF"))
         ) {
             newStatus = "In Flight";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
-            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Departed",
+                "OUT"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.offUtc,
+                carrierCode,
+                "In Flight",
+                "OFF"
+            );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("RTFL"))
         ) {
             newStatus = "Return To Airport";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
-            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
-            emit FlightStatusUpdated(
+            emit currentFlightStatus(
                 flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Departed",
+                "OUT"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.offUtc,
+                carrierCode,
+                "In Flight",
+                "OFF"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
                 status.onUtc,
-                "Return To Airport"
+                carrierCode,
+                "Return To Airport",
+                "RTFL"
             );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("DVRT"))
         ) {
             newStatus = "Diverted";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
-            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
-            emit FlightStatusUpdated(flightNumber, status.onUtc, "Diverted");
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Departed",
+                "OUT"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.offUtc,
+                carrierCode,
+                "In Flight",
+                "OFF"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.onUtc,
+                carrierCode,
+                "Diverted",
+                "DVRT"
+            );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("ON"))
         ) {
             newStatus = "Landed";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
-            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
-            emit FlightStatusUpdated(flightNumber, status.onUtc, "Landed");
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Departed",
+                "OUT"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.offUtc,
+                carrierCode,
+                "In Flight",
+                "OFF"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.onUtc,
+                carrierCode,
+                "Landed",
+                "ON"
+            );
         } else if (
             keccak256(abi.encodePacked(status.flightStatusCode)) ==
             keccak256(abi.encodePacked("IN"))
         ) {
             newStatus = "Arrived At Gate";
-            emit FlightStatusUpdated(flightNumber, status.outUtc, "Departed");
-            emit FlightStatusUpdated(flightNumber, status.offUtc, "In Flight");
-            emit FlightStatusUpdated(flightNumber, status.onUtc, "Landed");
-            emit FlightStatusUpdated(
+            emit currentFlightStatus(
                 flightNumber,
+                scheduledDepartureDate,
+                status.outUtc,
+                carrierCode,
+                "Departed",
+                "OUT"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.offUtc,
+                carrierCode,
+                "In Flight",
+                "OFF"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
+                status.onUtc,
+                carrierCode,
+                "Landed",
+                "ON"
+            );
+            emit currentFlightStatus(
+                flightNumber,
+                scheduledDepartureDate,
                 status.inUtc,
-                "Arrived At Gate"
+                carrierCode,
+                "Arrived At Gate",
+                "IN"
             );
         }
 
         return newStatus;
     }
 
-    function subscribe(uint256 months) public payable {
-        require(months > 0, "Subscription must be for at least 1 month");
-        uint256 expiry = block.timestamp + (months * 30 days);
-        subscriptions[msg.sender] = expiry;
-        emit Subscribed(msg.sender, expiry);
+    function addFlightSubscription(
+        string memory flightNumber,
+        string memory carrierCode,
+        string memory departureAirport,
+        string memory scheduledDepartureDate
+    ) public payable {
+        require(
+            subscriptions[flightNumber][carrierCode][departureAirport][
+                scheduledDepartureDate
+            ] == false,
+            "you are already Subscribed user"
+        );
+        require(
+            isFlightExist[flightNumber] == true,
+            "Flight is not Exist here"
+        );
+        subscriptions[flightNumber][carrierCode][departureAirport][
+            scheduledDepartureDate
+        ] = true;
+        emit SubscriptionDetails(
+            flightNumber,
+            msg.sender,
+            carrierCode,
+            scheduledDepartureDate,
+            departureAirport,
+            true
+        );
+    }
+
+    function removeFlightSubscription(
+        string memory flightNumber,
+        string memory carrierCode,
+        string memory departureAirport,
+        string memory scheduledDepartureDate
+    ) public {
+        require(
+            subscriptions[flightNumber][carrierCode][departureAirport][
+                scheduledDepartureDate
+            ] == true,
+            "You are not a subscribed user"
+        );
+        subscriptions[flightNumber][carrierCode][departureAirport][
+            scheduledDepartureDate
+        ] = false;
+        emit SubscriptionDetails(
+            flightNumber,
+            msg.sender,
+            carrierCode,
+            scheduledDepartureDate,
+            departureAirport,
+            false
+        );
     }
 }
