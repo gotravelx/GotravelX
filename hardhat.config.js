@@ -1,7 +1,7 @@
 require("@nomiclabs/hardhat-ethers");
 
 module.exports = {
-  solidity: "0.8.0",
+  solidity: "0.8.29",
   networks: {
     columbus: {
       url: "https://columbus.camino.network/ext/bc/C/rpc",
