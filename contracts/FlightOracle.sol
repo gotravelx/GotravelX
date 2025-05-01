@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.19;
 
 contract FlightStatusOracle {
     struct FlightData {
@@ -26,7 +26,7 @@ contract FlightStatusOracle {
         string scheduledDepartureUTC;
         string arrivalDelayMinutes;
         string departureDelayMinutes;
-        string baggageClaim;
+        string bagClaim;
     }
 
     struct UTCTimeStruct {
@@ -41,8 +41,8 @@ contract FlightStatusOracle {
     struct statuss {
         string flightStatusCode;
         string flightStatusDescription;
-        string ArrivalStatus;
-        string DepartureStatus;
+        string ArrivalState;
+        string DepartureState;
         string outUtc;
         string offUtc;
         string onUtc;
@@ -90,6 +90,8 @@ contract FlightStatusOracle {
         string currentFlightStatusTime,
         string carrierCode,
         string FlightStatus,
+        string ArrivalState,
+        string DepartureState,
         string FlightStatusCode
     );
 
@@ -142,7 +144,7 @@ contract FlightStatusOracle {
             scheduledDepartureUTC: Utctimes[5],
             arrivalDelayMinutes: Utctimes[6],
             departureDelayMinutes: Utctimes[7],
-            baggageClaim: Utctimes[8]
+            bagClaim: Utctimes[8]
         });
 
         checkFlightStatus[flightdata[0]][flightdata[1]][
@@ -150,8 +152,8 @@ contract FlightStatusOracle {
         ] = statuss({
             flightStatusCode: status[0],
             flightStatusDescription: status[1],
-            ArrivalStatus: status[2],
-            DepartureStatus: status[3],
+            ArrivalState: status[2],
+            DepartureState: status[3],
             outUtc: status[4],
             offUtc: status[5],
             onUtc: status[6],
@@ -201,7 +203,9 @@ contract FlightStatusOracle {
             flightdata[1],
             status[7], // Using inUtc as the current time
             flightdata[2],
-            status[1], // flightStatusDescription
+            status[1],
+            status[2],
+            status[3], // flightStatusDescription
             status[0]  // flightStatusCode
         );
     }
@@ -234,6 +238,8 @@ contract FlightStatusOracle {
             currentTime,
             carrierCode,
             flightStatus,
+            checkFlightStatus[flightNumber][scheduledDepartureDate][carrierCode].ArrivalState,
+            checkFlightStatus[flightNumber][scheduledDepartureDate][carrierCode].DepartureState,
             flightStatusCode
         );
     }
