@@ -1,7 +1,16 @@
 require("@nomiclabs/hardhat-ethers");
 
 module.exports = {
-  solidity: "0.8.29",
+  solidity: {
+    version: "0.8.20",
+    settings: {
+      optimizer: {
+        enabled: true,
+        runs: 200,
+      },
+      viaIR: true,  // Enable IR-based optimizer
+    },
+  },
   networks: {
     columbus: {
       url: "https://columbus.camino.network/ext/bc/C/rpc",
