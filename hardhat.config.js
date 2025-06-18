@@ -1,14 +1,16 @@
-require("@nomiclabs/hardhat-ethers");
+require("@nomicfoundation/hardhat-toolbox");
+require("@nomicfoundation/hardhat-chai-matchers");
+require("hardhat-gas-reporter");
+require("solidity-coverage");
 
 module.exports = {
   solidity: {
-    version: "0.8.20",
+    version: "0.8.30",
     settings: {
       optimizer: {
         enabled: true,
         runs: 200,
       },
-      viaIR: true,  // Enable IR-based optimizer
     },
   },
   networks: {

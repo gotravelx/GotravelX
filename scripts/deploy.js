@@ -1,19 +1,35 @@
+const { ethers } = require("hardhat");
+
 async function main() {
-  const [deployer] = await ethers.getSigners();
-  console.log("Deploying contract with account:", deployer.address);
+  console.log("Deploying FlightStatusOracle contract...");
 
-  const balance = await deployer.getBalance();
-  console.log("Account balance:", ethers.utils.formatEther(balance), "CAM");
+  // Get the contract factory
+  const FlightStatusOracle = await ethers.getContractFactory("FlightStatusOracle");
 
-  const TravelBooking = await ethers.getContractFactory("FlightStatusOracle");
-  const travelBooking = await TravelBooking.deploy();
+  // Deploy the contract
+  const flightOracle = await FlightStatusOracle.deploy();
+  await flightOracle.waitForDeployment();
 
-  console.log("Flight Status contract deployed to:", travelBooking.address);
+  const address = await flightOracle.getAddress();
+  console.log("FlightStatusOracle deployed to:", address);
+
+  // Verify deployment by calling a view function
+  console.log("Verifying deployment...");
+  
+  // You can add some initial test data here if needed
+  console.log("Contract deployed successfully!");
+  
+  return address;
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+// Handle both direct execution and module export
+if (require.main === module) {
+  main()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+}
+
+module.exports = main;

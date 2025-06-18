@@ -1,0 +1,5 @@
+{
+  "detectors": ["all"],
+  "fail_patter": "",
+  "filter_mode": "whitelist"
+}
