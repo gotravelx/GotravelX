@@ -1,138 +1,197 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.30;
+pragma solidity 0.8.30;
 
+/**
+ * @title FlightStatusOracle
+ * @dev A gas-optimized smart contract for managing flight information with hierarchical data structure
+ * @author Flight Oracle Team
+ */
 contract FlightStatusOracle {
-    struct FlightData {
-        string flightNumber;
-        string scheduledDepartureDate;
-        string carrierCode;
-        string arrivalCity;
-        string departureCity;
-        string arrivalAirport;
-        string departureAirport;
-        string operatingAirlineCode;
-        string arrivalGate;
-        string departureGate;
-        string flightStatus;
-        string equipmentModel;
+    /*//////////////////////////////////////////////////////////////
+                                STRUCTS
+    //////////////////////////////////////////////////////////////*/
+
+    // Child Structs - Grouped by logical functionality
+    struct FlightIdentifiers {
+        string carrierCode; // airline code
+        string flightNumber; // Flight number
+        string flightOriginateDate; // Date in YYYY-MM-DD format
     }
 
-    struct UtcTime {
-        string actualArrivalUTC;
-        string actualDepartureUTC;
-        string estimatedArrivalUTC;
-        string estimatedDepartureUTC;
-        string scheduledArrivalUTC;
-        string scheduledDepartureUTC;
-        string arrivalDelayMinutes;
-        string departureDelayMinutes;
-        string bagClaim;
+    struct AirportDetails {
+        string arrivalAirport; // airport code
+        string departureAirport; // airport code
+        string arrivalCity; // Full city name
+        string departureCity; // Full city name
     }
 
-    struct UTCTimeStruct {
-        string actualArrivalUTC;
-        string actualDepartureUTC;
-        string estimatedArrivalUTC;
-        string estimatedDepartureUTC;
-        string scheduledArrivalUTC;
-        string scheduledDepartureUTC;
+    struct FlightStatuses {
+        string arrivalStatus; // Current arrival status
+        string departureStatus; // Current departure status
+        string legStatus; // Overall leg status
     }
 
-    struct Status {
-        string flightStatusCode;
-        string flightStatusDescription;
-        string ArrivalState;
-        string DepartureState;
-        string outUtc;
-        string offUtc;
-        string onUtc;
-        string inUtc;
+    // Parent Struct - Main flight whole information container
+    struct FlightInfo {
+        FlightIdentifiers identifiers;
+        AirportDetails airports;
+        FlightStatuses statuses;
+        string compressedFlightInformation; // Additional compressed data
     }
 
+    // Input struct for batch operations
     struct FlightInput {
-        string[] flightdata;
-        string[] Utctimes;
-        string[] status;
-        string[] MarketingAirlineCode;
-        string[] marketingFlightNumber;
+        string[] flightDetails; // [carrierCode, flightNumber, originateDate, arrivalAirport, departureAirport, arrivalCity, departureCity, arrivalStatus, departureStatus, legStatus]
+        string compressedFlightInformation;
     }
 
-    struct MarketedFlightSegment {
-        string MarketingAirlineCode;
-        string FlightNumber;
-    }
+    /*//////////////////////////////////////////////////////////////
+                            STATE VARIABLES
+    //////////////////////////////////////////////////////////////*/
 
-    // New struct to hold All flight details with date
-    struct FlightDetailsWithDate {
-        FlightData flightData;
-        UtcTime utcTime;
-        Status status;
-        MarketedFlightSegment[] marketedSegments;
-        string currentStatus;
-        string scheduledDepartureDate;
-    }
+    // Access control
+    address private owner;
+    mapping(address => bool) private authorizedOracles;
+    
+    // Reentrancy guard
+    uint256 private constant NOT_ENTERED = 1;
+    uint256 private constant ENTERED = 2;
+    uint256 private reentrancyStatus;
 
-    mapping(string => mapping(string => mapping(string => FlightData)))
+    // Primary storage mapping: flightNumber => date => carrierCode => FlightInfo
+    mapping(string => mapping(string => mapping(string => FlightInfo)))
         private flights;
-    mapping(string => mapping(string => mapping(string => UtcTime)))
-        public UtcTimes;
-    mapping(string => mapping(string => mapping(string => Status)))
-        public checkFlightStatus;
-    mapping(string => mapping(string => mapping(string => MarketedFlightSegment[])))
-        public MarketedFlightSegments;
-    mapping(string => string) public setStatus;
-    mapping(address => mapping(string => mapping(string => mapping(string => bool))))
-        public isFlightSubscribed;
+
+    // Flight existence tracking
     mapping(string => bool) public isFlightExist;
-    string[] public flightNumbers;
 
-    // Added to track all dates associated with a flight/carrier
-    mapping(string => mapping(string => string[])) public flightDates; //store all schedule departure dates
+    // Flight dates tracking for efficient querying
+    mapping(string => mapping(string => string[])) public flightDates;
 
-    // Event for flight data insertion
-    event FlightDataSet(
-        string flightNumber,
-        string scheduledDepartureDate,
-        string carrierCode,
-        string arrivalCity,
-        string departureCity,
+    // User subscriptions: user => flightNumber => carrierCode => arrivalAirport => departureAirport => subscribed
+    mapping(address => mapping(string => mapping(string => mapping(string => mapping(string => bool)))))
+        public isFlightSubscribed;
+
+    // Quick status lookup
+    mapping(string => string) private currentStatus;
+
+    // All flight numbers for enumeration
+    string[] private allFlightNumbers;
+
+    // Rate limiting for data insertion
+    mapping(address => uint256) private lastDataInsertTime;
+    uint256 private constant DATA_INSERT_COOLDOWN = 60; // 1 minute cooldown
+
+    /*//////////////////////////////////////////////////////////////
+                                EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event FlightDataInserted(
+        string indexed flightNumber,
+        string indexed carrierCode,
+        string flightOriginateDate,
         string arrivalAirport,
         string departureAirport,
-        string arrivalGate,
-        string departureGate,
-        string CurrentFlightStatus,
-        UTCTimeStruct utcTimes
+        string arrivalCity,
+        string departureCity,
+        string arrivalStatus,
+        string departureStatus,
+        string legStatus
     );
 
-    // Event for flight status updates
-    event FlightStatusUpdate(
-        string flightNumber,
-        string scheduledDepartureDate,
-        string currentFlightStatusTime,
-        string carrierCode,
-        string FlightStatus,
-        string ArrivalState,
-        string DepartureState,
-        string bagClaim,
-        string FlightStatusCode
+    event FlightStatusUpdated(
+        string indexed flightNumber,
+        string indexed carrierCode,
+        string flightOriginateDate,
+        string newArrivalStatus,
+        string newDepartureStatus,
+        string newLegStatus
     );
 
-    event SubscriptionDetails(
-        string flightNumber,
-        address indexed user,
-        string carrierCode,
-        string departureAirport,
-        bool isSubscribe
+    event FlightSubscriptionAdded(
+        string indexed flightNumber,
+        string indexed carrierCode,
+        string arrivalAirport,
+        string departureAirport
     );
 
-    event SubscriptionsRemoved(
-        address indexed user,
-        uint256 numberOfFlightsUnsubscribed
-    );
+    event OracleAuthorized(address indexed oracle);
+    event OracleRevoked(address indexed oracle);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    constructor() {}
+    /*//////////////////////////////////////////////////////////////
+                               MODIFIERS
+    //////////////////////////////////////////////////////////////*/
 
-    // Helper function to compare dates (returns true if date1 <= date2)
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyAuthorizedOracle() {
+        if (!authorizedOracles[msg.sender] && msg.sender != owner) revert Unauthorized();
+        _;
+    }
+
+    modifier nonReentrant() {
+        if (reentrancyStatus == ENTERED) revert ReentrancyGuard();
+        reentrancyStatus = ENTERED;
+        _;
+        reentrancyStatus = NOT_ENTERED;
+    }
+
+    modifier flightExists(string memory flightNumber) {
+        if (!isFlightExist[flightNumber]) revert FlightNotFound();
+        _;
+    }
+
+    modifier validDateFormat(string memory date) {
+        if (bytes(date).length != 10) revert InvalidDateFormat();
+        _;
+    }
+
+    modifier rateLimit() {
+        if (block.timestamp < lastDataInsertTime[msg.sender] + DATA_INSERT_COOLDOWN) {
+            revert RateLimitExceeded();
+        }
+        lastDataInsertTime[msg.sender] = block.timestamp;
+        _;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                ERRORS
+    //////////////////////////////////////////////////////////////*/
+
+    error FlightNotFound();
+    error InvalidDateFormat();
+    error InvalidArrayLength();
+    error AlreadySubscribed();
+    error NoFlightDataProvided();
+    error TooManyFlightsInBatch();
+    error DateRangeExceeded();
+    error NoDataForCarrier();
+    error Unauthorized();
+    error ReentrancyGuard();
+    error RateLimitExceeded();
+    error InvalidInput();
+    error StringTooLong();
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor() {
+        owner = msg.sender;
+        authorizedOracles[msg.sender] = true;
+        reentrancyStatus = NOT_ENTERED;
+    }
+
+    /**
+     * @dev Compares two date strings (YYYY-MM-DD format)
+     * @param date1 First date
+     * @param date2 Second date
+     * @return true if date1 <= date2
+     */
     function isDateLessThanOrEqual(string memory date1, string memory date2)
         public
         pure
@@ -141,365 +200,453 @@ contract FlightStatusOracle {
         bytes memory d1 = bytes(date1);
         bytes memory d2 = bytes(date2);
 
-        require(d1.length == 10 && d2.length == 10, "Invalid date format");
+        if (d1.length != 10 || d2.length != 10) revert InvalidDateFormat();
 
-        for (uint256 i = 0; i < 10; i++) {
+        for (uint256 i = 0; i < 10; ) {
             if (d1[i] < d2[i]) return true;
             if (d1[i] > d2[i]) return false;
-        }
-
-        return true; // dates are equal
-    }
-
-    // Split function to avoid stack too deep error
-    function _storeDateInfo(
-        string memory flightNumber,
-        string memory scheduledDepartureDate,
-        string memory carrierCode
-    ) internal {
-        // Store date information for the flight
-        bool dateExists = false;
-        string[] storage dates = flightDates[flightNumber][carrierCode];
-        for (uint256 i = 0; i < dates.length; i++) {
-            if (
-                keccak256(bytes(dates[i])) ==
-                keccak256(bytes(scheduledDepartureDate))
-            ) {
-                dateExists = true;
-                break;
+            unchecked {
+                ++i;
             }
         }
-        if (!dateExists) {
-            flightDates[flightNumber][carrierCode].push(scheduledDepartureDate);
+
+        return true;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        ACCESS CONTROL FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Transfers ownership of the contract to a new account
+     */
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert InvalidInput();
+        address oldOwner = owner;
+        owner = newOwner;
+        authorizedOracles[newOwner] = true;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+
+    /**
+     * @dev Authorizes an oracle to insert flight data
+     */
+    function authorizeOracle(address oracle) external onlyOwner {
+        if (oracle == address(0)) revert InvalidInput();
+        authorizedOracles[oracle] = true;
+        emit OracleAuthorized(oracle);
+    }
+
+    /**
+     * @dev Revokes oracle authorization
+     */
+    function revokeOracle(address oracle) external onlyOwner {
+        if (oracle == address(0)) revert InvalidInput();
+        if (oracle == owner) revert InvalidInput(); // Cannot revoke owner
+        authorizedOracles[oracle] = false;
+        emit OracleRevoked(oracle);
+    }
+
+    /**
+     * @dev Checks if an address is an authorized oracle
+     */
+    function isAuthorizedOracle(address oracle) external view returns (bool) {
+        return authorizedOracles[oracle];
+    }
+
+    /**
+     * @dev Returns the current owner
+     */
+    function getOwner() external view returns (address) {
+        return owner;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        INTERNAL FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Validates string input to prevent excessively long strings
+     */
+    function _validateString(string memory str) internal pure {
+        if (bytes(str).length > 100) revert StringTooLong();
+        
+        // Check for null bytes and control characters
+        bytes memory strBytes = bytes(str);
+        for (uint256 i = 0; i < strBytes.length; ) {
+            bytes1 char = strBytes[i];
+            if (char == 0x00 || (char < 0x20 && char != 0x09 && char != 0x0A && char != 0x0D)) {
+                revert InvalidInput();
+            }
+            unchecked {
+                ++i;
+            }
         }
     }
 
-    function _storeMarketingSegments(
+    /**
+     * @dev Stores date information to avoid duplicates
+     */
+    function _storeDateInfo(
         string memory flightNumber,
-        string memory scheduledDepartureDate,
-        string memory carrierCode,
-        string[] memory MarketingAirlineCode,
-        string[] memory marketingFlightNumber
+        string memory flightOriginateDate,
+        string memory carrierCode
     ) internal {
-        for (uint256 i = 0; i < MarketingAirlineCode.length; i++) {
-            MarketedFlightSegments[flightNumber][scheduledDepartureDate][
-                carrierCode
-            ].push(
-                    MarketedFlightSegment(
-                        MarketingAirlineCode[i],
-                        marketingFlightNumber[i]
-                    )
-                );
+        string[] storage dates = flightDates[flightNumber][carrierCode];
+        bytes32 targetDateHash = keccak256(bytes(flightOriginateDate));
+
+        uint256 datesLength = dates.length;
+        for (uint256 i = 0; i < datesLength; ) {
+            if (keccak256(bytes(dates[i])) == targetDateHash) {
+                return; // Date already exists
+            }
+            unchecked {
+                ++i;
+            }
         }
+
+        dates.push(flightOriginateDate);
     }
 
-    function _emitEvents(string[] memory flightdata, string[] memory Utctimes)
+    /**
+     * @dev Validates flight details array length
+     */
+    function _validateFlightDetailsArray(string[] memory flightDetails)
         internal
+        pure
     {
-        UTCTimeStruct memory utcEventData = UTCTimeStruct({
-            actualArrivalUTC: Utctimes[0],
-            actualDepartureUTC: Utctimes[1],
-            estimatedArrivalUTC: Utctimes[2],
-            estimatedDepartureUTC: Utctimes[3],
-            scheduledArrivalUTC: Utctimes[4],
-            scheduledDepartureUTC: Utctimes[5]
-        });
-
-        // Emit event with the data as received
-        emit FlightDataSet(
-            flightdata[0],
-            flightdata[1],
-            flightdata[2],
-            flightdata[3],
-            flightdata[4],
-            flightdata[5],
-            flightdata[6],
-            flightdata[8],
-            flightdata[9],
-            flightdata[10],
-            utcEventData
-        );
-    }
-
-    function insertFlightDetails(
-        string[] memory flightdata,
-        string[] memory Utctimes,
-        string[] memory status,
-        string[] memory MarketingAirlineCode,
-        string[] memory marketingFlightNumber
-    ) public {
-        flightNumbers.push(flightdata[0]);
-        isFlightExist[flightdata[0]] = true;
-
-        // Use helper function to store date info
-        _storeDateInfo(flightdata[0], flightdata[1], flightdata[2]);
-
-        flights[flightdata[0]][flightdata[1]][flightdata[2]] = FlightData({
-            flightNumber: flightdata[0],
-            scheduledDepartureDate: flightdata[1],
-            carrierCode: flightdata[2],
-            arrivalCity: flightdata[3],
-            departureCity: flightdata[4],
-            arrivalAirport: flightdata[5],
-            departureAirport: flightdata[6],
-            operatingAirlineCode: flightdata[7],
-            arrivalGate: flightdata[8],
-            departureGate: flightdata[9],
-            flightStatus: flightdata[10],
-            equipmentModel: flightdata[11]
-        });
-
-        UtcTimes[flightdata[0]][flightdata[1]][flightdata[2]] = UtcTime({
-            actualArrivalUTC: Utctimes[0],
-            actualDepartureUTC: Utctimes[1],
-            estimatedArrivalUTC: Utctimes[2],
-            estimatedDepartureUTC: Utctimes[3],
-            scheduledArrivalUTC: Utctimes[4],
-            scheduledDepartureUTC: Utctimes[5],
-            arrivalDelayMinutes: Utctimes[6],
-            departureDelayMinutes: Utctimes[7],
-            bagClaim: Utctimes[8]
-        });
-
-        checkFlightStatus[flightdata[0]][flightdata[1]][
-            flightdata[2]
-        ] = Status({
-            flightStatusCode: status[0],
-            flightStatusDescription: status[1],
-            ArrivalState: status[2],
-            DepartureState: status[3],
-            outUtc: status[4],
-            offUtc: status[5],
-            onUtc: status[6],
-            inUtc: status[7]
-        });
-
-        // Use helper function for marketing segments
-        _storeMarketingSegments(
-            flightdata[0],
-            flightdata[1],
-            flightdata[2],
-            MarketingAirlineCode,
-            marketingFlightNumber
-        );
-
-        // Store current status
-        setStatus[flightdata[0]] = status[1]; // Use flightStatusDescription
-
-        // Use helper function to emit events
-        _emitEvents(flightdata, Utctimes);
-    }
-
-    function insertMultipleFlightDetails(FlightInput[] memory flightInputs)
-        external
-    {
-        require(flightInputs.length > 0, "No flight data provided");
-        require(flightInputs.length <= 50, "Too many flights in batch"); // Limit to prevent gas limit issues
-
-        for (uint256 i = 0; i < flightInputs.length; i++) {
-            insertFlightDetails(
-                flightInputs[i].flightdata,
-                flightInputs[i].Utctimes,
-                flightInputs[i].status,
-                flightInputs[i].MarketingAirlineCode,
-                flightInputs[i].marketingFlightNumber
-            );
+        if (flightDetails.length != 10) revert InvalidArrayLength();
+        
+        // Validate each string in the array
+        for (uint256 i = 0; i < 10; ) {
+            _validateString(flightDetails[i]);
+            unchecked {
+                ++i;
+            }
         }
     }
 
-    // Function to update flight status
+    /**
+     * @dev Creates FlightInfo struct from array input
+     */
+    function _createFlightInfo(
+        string[] memory flightDetails,
+        string memory compressedInfo
+    ) internal pure returns (FlightInfo memory) {
+        _validateString(compressedInfo);
+        
+        return
+            FlightInfo({
+                identifiers: FlightIdentifiers({
+                    carrierCode: flightDetails[0],
+                    flightNumber: flightDetails[1],
+                    flightOriginateDate: flightDetails[2]
+                }),
+                airports: AirportDetails({
+                    arrivalAirport: flightDetails[3],
+                    departureAirport: flightDetails[4],
+                    arrivalCity: flightDetails[5],
+                    departureCity: flightDetails[6]
+                }),
+                statuses: FlightStatuses({
+                    arrivalStatus: flightDetails[7],
+                    departureStatus: flightDetails[8],
+                    legStatus: flightDetails[9]
+                }),
+                compressedFlightInformation: compressedInfo
+            });
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        MAIN FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Inserts flight details using a single array for all details
+     * @param flightDetails Array containing: [carrierCode, flightNumber, originateDate, arrivalAirport, departureAirport, arrivalCity, departureCity, arrivalStatus, departureStatus, legStatus]
+     * @param compressedFlightInformation Additional compressed flight data
+     */
+    function storeFlightDetails(
+        string[] memory flightDetails,
+        string memory compressedFlightInformation
+    ) public onlyAuthorizedOracle nonReentrant rateLimit {
+        _validateFlightDetailsArray(flightDetails);
+
+        string memory flightNumber = flightDetails[1];
+        string memory carrierCode = flightDetails[0];
+        string memory flightOriginateDate = flightDetails[2];
+
+        // Validate date format
+        if (bytes(flightOriginateDate).length != 10) revert InvalidDateFormat();
+
+        // Create and store flight info
+        FlightInfo memory flightInfo = _createFlightInfo(
+            flightDetails,
+            compressedFlightInformation
+        );
+        flights[flightNumber][flightOriginateDate][carrierCode] = flightInfo;
+
+        // Update tracking data
+        if (!isFlightExist[flightNumber]) {
+            isFlightExist[flightNumber] = true;
+            allFlightNumbers.push(flightNumber);
+        }
+
+        _storeDateInfo(flightNumber, flightOriginateDate, carrierCode);
+        currentStatus[flightNumber] = flightDetails[9]; // legStatus
+
+        emit FlightDataInserted(
+            flightNumber,
+            carrierCode,
+            flightOriginateDate,
+            flightDetails[3], // arrivalAirport
+            flightDetails[4], // departureAirport
+            flightDetails[5], // arrivalCity
+            flightDetails[6], // departureCity
+            flightDetails[7], // arrivalStatus
+            flightDetails[8], // departureStatus
+            flightDetails[9] // legStatus
+        );
+    }
+
+    /**
+     * @dev Inserts multiple flight details in batch
+     * @param flightInputs Array of FlightInput structs
+     */
+    function storeMultipleFlightDetails(FlightInput[] memory flightInputs)
+        external
+        onlyAuthorizedOracle
+        nonReentrant
+        rateLimit
+    {
+        uint256 inputLength = flightInputs.length;
+        if (inputLength == 0) revert NoFlightDataProvided();
+        if (inputLength > 100) revert TooManyFlightsInBatch();
+
+        for (uint256 i = 0; i < inputLength; ) {
+            storeFlightDetails(
+                flightInputs[i].flightDetails,
+                flightInputs[i].compressedFlightInformation
+            );
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /**
+     * @dev Updates flight status information
+     */
     function updateFlightStatus(
         string memory flightNumber,
-        string memory scheduledDepartureDate,
+        string memory flightOriginateDate,
         string memory carrierCode,
-        string memory currentTime,
-        string memory flightStatus,
-        string memory flightStatusCode
-    ) external {
-        require(isFlightExist[flightNumber], "Flight does not exist");
+        string memory arrivalStatus,
+        string memory departureStatus,
+        string memory legStatus
+    ) external onlyAuthorizedOracle nonReentrant {
+        if (!isFlightExist[flightNumber]) revert FlightNotFound();
+        
+        // Validate inputs
+        _validateString(flightNumber);
+        _validateString(flightOriginateDate);
+        _validateString(carrierCode);
+        _validateString(arrivalStatus);
+        _validateString(departureStatus);
+        _validateString(legStatus);
 
-        // Update status in storage
-        checkFlightStatus[flightNumber][scheduledDepartureDate][carrierCode]
-            .flightStatusCode = flightStatusCode;
-        checkFlightStatus[flightNumber][scheduledDepartureDate][carrierCode]
-            .flightStatusDescription = flightStatus;
+        FlightInfo storage flightInfo = flights[flightNumber][
+            flightOriginateDate
+        ][carrierCode];
+        flightInfo.statuses.arrivalStatus = arrivalStatus;
+        flightInfo.statuses.departureStatus = departureStatus;
+        flightInfo.statuses.legStatus = legStatus;
 
-        // Update the current status
-        setStatus[flightNumber] = flightStatus;
+        currentStatus[flightNumber] = legStatus;
 
-        // Emit the status update event
-        emit FlightStatusUpdate(
+        emit FlightStatusUpdated(
             flightNumber,
-            scheduledDepartureDate,
-            currentTime,
             carrierCode,
-            flightStatus,
-            checkFlightStatus[flightNumber][scheduledDepartureDate][carrierCode]
-                .ArrivalState,
-            checkFlightStatus[flightNumber][scheduledDepartureDate][carrierCode]
-                .DepartureState,
-            UtcTimes[flightNumber][scheduledDepartureDate][carrierCode]
-                .bagClaim, // TODO: Update bagclaim in storage if it is
-            flightStatusCode
+            flightOriginateDate,
+            arrivalStatus,
+            departureStatus,
+            legStatus
         );
     }
 
-    // Modified function to get flight details within a date range
-    // Helper function for getting flight segments
-    function _getFlightSegments(
-        string memory flightNumber,
-        string memory date,
-        string memory carrierCode
-    ) internal view returns (MarketedFlightSegment[] memory) {
-        uint256 segmentLength = MarketedFlightSegments[flightNumber][date][
-            carrierCode
-        ].length;
-        MarketedFlightSegment[] memory segments = new MarketedFlightSegment[](
-            segmentLength
-        );
+    /*//////////////////////////////////////////////////////////////
+                           QUERY FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-        for (uint256 j = 0; j < segmentLength; j++) {
-            segments[j] = MarketedFlightSegments[flightNumber][date][
-                carrierCode
-            ][j];
-        }
-
-        return segments;
-    }
-
-    // Main function to get flight details within a date range
-    function getFlightDetails(
+    /**
+     * @dev Gets flight details within a date range
+     */
+    function getFlightHistory(
         string memory flightNumber,
         string memory fromDate,
         uint256 fromDateInTimeStamp,
         string memory toDate,
         string memory carrierCode
-    ) external view returns (FlightDetailsWithDate[] memory) {
-        require(isFlightExist[flightNumber], "Flight does not exist");
-        require(
-            flightDates[flightNumber][carrierCode].length > 0,
-            "No data for carrier"
-        );
-        require(
-            fromDateInTimeStamp >= block.timestamp - 2592000,
-            "please enter under 30 days"
-        ); // validation for check 30 days for from date
+    ) external view returns (FlightInfo[] memory) {
+        if (!isFlightExist[flightNumber]) revert FlightNotFound();
+        if (fromDateInTimeStamp < block.timestamp - 30 days)
+            revert DateRangeExceeded();
 
-        // Get all departureDates for this flight and carrier
-        string[] storage departureDates = flightDates[flightNumber][
-            carrierCode
-        ]; //store all departure dates of flight
+        // Validate inputs
+        _validateString(flightNumber);
+        _validateString(fromDate);
+        _validateString(toDate);
+        _validateString(carrierCode);
 
-        // First count how many dates are in range to allocate memory
+        return _getFlightHistoryInternal(flightNumber, fromDate, toDate, carrierCode);
+    }
+
+    /**
+     * @dev Internal function to handle flight history retrieval
+     */
+    function _getFlightHistoryInternal(
+        string memory flightNumber,
+        string memory fromDate,
+        string memory toDate,
+        string memory carrierCode
+    ) internal view returns (FlightInfo[] memory) {
+        string[] storage departureDates = flightDates[flightNumber][carrierCode];
+        if (departureDates.length == 0) revert NoDataForCarrier();
+
+        // Count matching dates
         uint256 count = 0;
-        for (uint256 i = 0; i < departureDates.length; i++) {
+        uint256 datesLength = departureDates.length;
+        for (uint256 i = 0; i < datesLength; ) {
             if (
                 isDateLessThanOrEqual(fromDate, departureDates[i]) &&
                 isDateLessThanOrEqual(departureDates[i], toDate)
             ) {
-                count++;
+                unchecked {
+                    ++count;
+                }
+            }
+            unchecked {
+                ++i;
             }
         }
 
-        // Create result array with proper size
-        FlightDetailsWithDate[] memory results = new FlightDetailsWithDate[](
-            count
-        );
-
-        // Fill the results array with matching flight details
+        // Populate results
+        FlightInfo[] memory results = new FlightInfo[](count);
         uint256 resultIndex = 0;
-        for (uint256 i = 0; i < departureDates.length; i++) {
-            string memory currentDate = departureDates[i];
 
-            // Check if date is in range
+        for (uint256 i = 0; i < datesLength; ) {
             if (
-                isDateLessThanOrEqual(fromDate, currentDate) &&
-                isDateLessThanOrEqual(currentDate, toDate)
+                isDateLessThanOrEqual(fromDate, departureDates[i]) &&
+                isDateLessThanOrEqual(departureDates[i], toDate)
             ) {
-                // Get marketed segments using helper function
-                MarketedFlightSegment[] memory segments = _getFlightSegments(
-                    flightNumber,
-                    currentDate,
+                results[resultIndex] = flights[flightNumber][departureDates[i]][
                     carrierCode
-                );
-
-                // Create and populate the result structure
-                results[resultIndex] = FlightDetailsWithDate({
-                    flightData: flights[flightNumber][currentDate][carrierCode],
-                    utcTime: UtcTimes[flightNumber][currentDate][carrierCode],
-                    status: checkFlightStatus[flightNumber][currentDate][
-                        carrierCode
-                    ],
-                    marketedSegments: segments,
-                    currentStatus: setStatus[flightNumber],
-                    scheduledDepartureDate: currentDate
-                });
-
-                resultIndex++;
+                ];
+                unchecked {
+                    ++resultIndex;
+                }
+            }
+            unchecked {
+                ++i;
             }
         }
 
         return results;
     }
 
+    /**
+     * @dev Gets all flight numbers in the system
+     */
+    function getAllFlightNumbers() external view returns (string[] memory) {
+        return allFlightNumbers;
+    }
+
+    /**
+     * @dev Gets all dates for a specific flight and carrier
+     */
+    function getFlightDates(
+        string memory flightNumber,
+        string memory carrierCode
+    ) external view returns (string[] memory) {
+        _validateString(flightNumber);
+        _validateString(carrierCode);
+        return flightDates[flightNumber][carrierCode];
+    }
+
+    /**
+     * @dev Gets current status of a flight
+     */
+    function getCurrentFlightStatus(string memory flightNumber)
+        external
+        view
+        flightExists(flightNumber)
+        returns (string memory)
+    {
+        _validateString(flightNumber);
+        return currentStatus[flightNumber];
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        SUBSCRIPTION FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Adds a flight subscription for a user
+     */
     function addFlightSubscription(
         string memory flightNumber,
         string memory carrierCode,
+        string memory arrivalAirport,
         string memory departureAirport
-    ) public payable {
-        require(
+    ) external payable nonReentrant {
+        if (!isFlightExist[flightNumber]) revert FlightNotFound();
+        
+        // Validate inputs
+        _validateString(flightNumber);
+        _validateString(carrierCode);
+        _validateString(arrivalAirport);
+        _validateString(departureAirport);
+        
+        if (
             isFlightSubscribed[msg.sender][flightNumber][carrierCode][
-                departureAirport
-            ] == false,
-            "you are already Subscribed user"
-        );
-        require(
-            isFlightExist[flightNumber] == true,
-            "Flight is not Exist here"
-        );
+                arrivalAirport
+            ][departureAirport]
+        ) {
+            revert AlreadySubscribed();
+        }
+
         isFlightSubscribed[msg.sender][flightNumber][carrierCode][
-            departureAirport
-        ] = true;
-        emit SubscriptionDetails(
+            arrivalAirport
+        ][departureAirport] = true;
+
+        emit FlightSubscriptionAdded(
             flightNumber,
-            msg.sender,
             carrierCode,
-            departureAirport,
-            true
+            arrivalAirport,
+            departureAirport
         );
     }
 
-    function removeFlightSubscription(
-        string[] memory flightNum,
-        string[] memory carrierCode,
-        string[] memory departureAirport
-    ) public {
-        uint256 unsubscribedCount = 0;
-
-        for (uint256 i = 0; i < flightNum.length; i++) {
-            string memory flightNumber = flightNum[i];
-            string memory carriercode = carrierCode[i];
-            string memory departureairport = departureAirport[i];
-
-            if (
-                isFlightSubscribed[msg.sender][flightNumber][carriercode][
-                    departureairport
-                ]
-            ) {
-                isFlightSubscribed[msg.sender][flightNumber][carriercode][
-                    departureairport
-                ] = false;
-                unsubscribedCount++;
-
-                emit SubscriptionDetails(
-                    flightNumber,
-                    msg.sender,
-                    carriercode,
-                    departureairport,
-                    false
-                );
-            }
-        }
-        emit SubscriptionsRemoved(msg.sender, unsubscribedCount);
+    /**
+     * @dev Checks if a user is subscribed to a flight
+     */
+    function isUserSubscribed(
+        address user,
+        string memory flightNumber,
+        string memory carrierCode,
+        string memory arrivalAirport,
+        string memory departureAirport
+    ) external view returns (bool) {
+        if (user == address(0)) revert InvalidInput();
+        
+        _validateString(flightNumber);
+        _validateString(carrierCode);
+        _validateString(arrivalAirport);
+        _validateString(departureAirport);
+        
+        return
+            isFlightSubscribed[user][flightNumber][carrierCode][arrivalAirport][
+                departureAirport
+            ];
     }
 }
