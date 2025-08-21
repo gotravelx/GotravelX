@@ -36,7 +36,7 @@ contract FlightStatusOracle {
         FlightIdentifiers identifiers;
         AirportDetails airports;
         FlightStatuses statuses;
-        string compressedFlightInformation; // Additional compressed data
+        bytes compressedFlightInformation; // Additional compressed data
     }
 
     // Input struct for batch operations
@@ -52,7 +52,7 @@ contract FlightStatusOracle {
     // Access control
     address private owner;
     mapping(address => bool) private authorizedOracles;
-    
+
     // Reentrancy guard
     uint256 private constant NOT_ENTERED = 1;
     uint256 private constant ENTERED = 2;
@@ -63,14 +63,14 @@ contract FlightStatusOracle {
         private flights;
 
     // Flight existence tracking
-    mapping(string => bool) public isFlightExist;
+    mapping(string =>mapping(string => bool)) public isFlightExist;
 
     // Flight dates tracking for efficient querying
-    mapping(string => mapping(string => string[])) public flightDates;
+    mapping(string => mapping(string => string[])) private flightDates;
 
     // User subscriptions: user => flightNumber => carrierCode => arrivalAirport => departureAirport => subscribed
     mapping(address => mapping(string => mapping(string => mapping(string => mapping(string => bool)))))
-        public isFlightSubscribed;
+        private isFlightSubscribed;
 
     // Quick status lookup
     mapping(string => string) private currentStatus;
@@ -80,15 +80,15 @@ contract FlightStatusOracle {
 
     // Rate limiting for data insertion
     mapping(address => uint256) private lastDataInsertTime;
-    uint256 private constant DATA_INSERT_COOLDOWN = 60; // 1 minute cooldown
+    uint256 private constant DATA_INSERT_COOLDOWN = 10; // 10 second cooldown
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
 
     event FlightDataInserted(
-        string indexed flightNumber,
-        string indexed carrierCode,
+        string flightNumber,
+        string carrierCode,
         string flightOriginateDate,
         string arrivalAirport,
         string departureAirport,
@@ -100,8 +100,8 @@ contract FlightStatusOracle {
     );
 
     event FlightStatusUpdated(
-        string indexed flightNumber,
-        string indexed carrierCode,
+        string flightNumber,
+        string carrierCode,
         string flightOriginateDate,
         string newArrivalStatus,
         string newDepartureStatus,
@@ -109,15 +109,27 @@ contract FlightStatusOracle {
     );
 
     event FlightSubscriptionAdded(
-        string indexed flightNumber,
-        string indexed carrierCode,
+        address user,
+        string flightNumber,
+        string carrierCode,
+        string arrivalAirport,
+        string departureAirport
+    );
+
+    event FlightUnsubscribed(
+        address user,
+        string flightNumber,
+        string carrierCode,
         string arrivalAirport,
         string departureAirport
     );
 
     event OracleAuthorized(address indexed oracle);
     event OracleRevoked(address indexed oracle);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
 
     /*//////////////////////////////////////////////////////////////
                                MODIFIERS
@@ -129,7 +141,8 @@ contract FlightStatusOracle {
     }
 
     modifier onlyAuthorizedOracle() {
-        if (!authorizedOracles[msg.sender] && msg.sender != owner) revert Unauthorized();
+        if (!authorizedOracles[msg.sender] && msg.sender != owner)
+            revert Unauthorized();
         _;
     }
 
@@ -140,8 +153,8 @@ contract FlightStatusOracle {
         reentrancyStatus = NOT_ENTERED;
     }
 
-    modifier flightExists(string memory flightNumber) {
-        if (!isFlightExist[flightNumber]) revert FlightNotFound();
+    modifier flightExists(string memory flightNumber, string memory carrierCode) {
+        if (!isFlightExist[flightNumber][carrierCode]) revert FlightNotFound();
         _;
     }
 
@@ -151,11 +164,14 @@ contract FlightStatusOracle {
     }
 
     modifier rateLimit() {
-        if (block.timestamp < lastDataInsertTime[msg.sender] + DATA_INSERT_COOLDOWN) {
+        if (
+            block.timestamp <
+            lastDataInsertTime[msg.sender] + DATA_INSERT_COOLDOWN
+        ) {
             revert RateLimitExceeded();
         }
-        lastDataInsertTime[msg.sender] = block.timestamp;
         _;
+        lastDataInsertTime[msg.sender] = block.timestamp;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -163,6 +179,8 @@ contract FlightStatusOracle {
     //////////////////////////////////////////////////////////////*/
 
     error FlightNotFound();
+    error ArrayLengthMismatch();
+    error NotSubscribed();
     error InvalidDateFormat();
     error InvalidArrayLength();
     error AlreadySubscribed();
@@ -193,7 +211,7 @@ contract FlightStatusOracle {
      * @return true if date1 <= date2
      */
     function isDateLessThanOrEqual(string memory date1, string memory date2)
-        public
+        private
         pure
         returns (bool)
     {
@@ -270,12 +288,15 @@ contract FlightStatusOracle {
      */
     function _validateString(string memory str) internal pure {
         if (bytes(str).length > 100) revert StringTooLong();
-        
+
         // Check for null bytes and control characters
         bytes memory strBytes = bytes(str);
         for (uint256 i = 0; i < strBytes.length; ) {
             bytes1 char = strBytes[i];
-            if (char == 0x00 || (char < 0x20 && char != 0x09 && char != 0x0A && char != 0x0D)) {
+            if (
+                char == 0x00 ||
+                (char < 0x20 && char != 0x09 && char != 0x0A && char != 0x0D)
+            ) {
                 revert InvalidInput();
             }
             unchecked {
@@ -316,7 +337,7 @@ contract FlightStatusOracle {
         pure
     {
         if (flightDetails.length != 10) revert InvalidArrayLength();
-        
+
         // Validate each string in the array
         for (uint256 i = 0; i < 10; ) {
             _validateString(flightDetails[i]);
@@ -333,8 +354,6 @@ contract FlightStatusOracle {
         string[] memory flightDetails,
         string memory compressedInfo
     ) internal pure returns (FlightInfo memory) {
-        _validateString(compressedInfo);
-        
         return
             FlightInfo({
                 identifiers: FlightIdentifiers({
@@ -353,7 +372,7 @@ contract FlightStatusOracle {
                     departureStatus: flightDetails[8],
                     legStatus: flightDetails[9]
                 }),
-                compressedFlightInformation: compressedInfo
+                compressedFlightInformation: bytes(compressedInfo)
             });
     }
 
@@ -387,8 +406,8 @@ contract FlightStatusOracle {
         flights[flightNumber][flightOriginateDate][carrierCode] = flightInfo;
 
         // Update tracking data
-        if (!isFlightExist[flightNumber]) {
-            isFlightExist[flightNumber] = true;
+        if (!isFlightExist[flightNumber][carrierCode]) {
+            isFlightExist[flightNumber][carrierCode] = true;
             allFlightNumbers.push(flightNumber);
         }
 
@@ -445,8 +464,8 @@ contract FlightStatusOracle {
         string memory departureStatus,
         string memory legStatus
     ) external onlyAuthorizedOracle nonReentrant {
-        if (!isFlightExist[flightNumber]) revert FlightNotFound();
-        
+        if (!isFlightExist[flightNumber][carrierCode]) revert FlightNotFound();
+
         // Validate inputs
         _validateString(flightNumber);
         _validateString(flightOriginateDate);
@@ -486,9 +505,19 @@ contract FlightStatusOracle {
         string memory fromDate,
         uint256 fromDateInTimeStamp,
         string memory toDate,
-        string memory carrierCode
+        string memory carrierCode,
+        string memory arrivalAirport,
+        string memory departureAirport
     ) external view returns (FlightInfo[] memory) {
-        if (!isFlightExist[flightNumber]) revert FlightNotFound();
+        // ✅ Subscription check
+        if (
+            !isFlightSubscribed[msg.sender][flightNumber][carrierCode][
+                arrivalAirport
+            ][departureAirport]
+        ) {
+            revert NotSubscribed();
+        }
+        if (!isFlightExist[flightNumber][carrierCode]) revert FlightNotFound();
         if (fromDateInTimeStamp < block.timestamp - 30 days)
             revert DateRangeExceeded();
 
@@ -498,7 +527,13 @@ contract FlightStatusOracle {
         _validateString(toDate);
         _validateString(carrierCode);
 
-        return _getFlightHistoryInternal(flightNumber, fromDate, toDate, carrierCode);
+        return
+            _getFlightHistoryInternal(
+                flightNumber,
+                fromDate,
+                toDate,
+                carrierCode
+            );
     }
 
     /**
@@ -510,7 +545,9 @@ contract FlightStatusOracle {
         string memory toDate,
         string memory carrierCode
     ) internal view returns (FlightInfo[] memory) {
-        string[] storage departureDates = flightDates[flightNumber][carrierCode];
+        string[] storage departureDates = flightDates[flightNumber][
+            carrierCode
+        ];
         if (departureDates.length == 0) revert NoDataForCarrier();
 
         // Count matching dates
@@ -576,10 +613,10 @@ contract FlightStatusOracle {
     /**
      * @dev Gets current status of a flight
      */
-    function getCurrentFlightStatus(string memory flightNumber)
+    function getCurrentFlightStatus(string memory flightNumber, string memory carrierCode)
         external
         view
-        flightExists(flightNumber)
+        flightExists(flightNumber, carrierCode)
         returns (string memory)
     {
         _validateString(flightNumber);
@@ -599,14 +636,14 @@ contract FlightStatusOracle {
         string memory arrivalAirport,
         string memory departureAirport
     ) external payable nonReentrant {
-        if (!isFlightExist[flightNumber]) revert FlightNotFound();
-        
+        if (!isFlightExist[flightNumber][carrierCode]) revert FlightNotFound();
+
         // Validate inputs
         _validateString(flightNumber);
         _validateString(carrierCode);
         _validateString(arrivalAirport);
         _validateString(departureAirport);
-        
+
         if (
             isFlightSubscribed[msg.sender][flightNumber][carrierCode][
                 arrivalAirport
@@ -620,6 +657,7 @@ contract FlightStatusOracle {
         ][departureAirport] = true;
 
         emit FlightSubscriptionAdded(
+            msg.sender,
             flightNumber,
             carrierCode,
             arrivalAirport,
@@ -638,15 +676,55 @@ contract FlightStatusOracle {
         string memory departureAirport
     ) external view returns (bool) {
         if (user == address(0)) revert InvalidInput();
-        
+
         _validateString(flightNumber);
         _validateString(carrierCode);
         _validateString(arrivalAirport);
         _validateString(departureAirport);
-        
+
         return
             isFlightSubscribed[user][flightNumber][carrierCode][arrivalAirport][
                 departureAirport
             ];
+    }
+
+    function removeFlightSubscription(
+        string[] memory flightNumbers,
+        string[] memory carrierCodes,
+        string[] memory arrivalAirports,
+        string[] memory departureAirports
+    ) external {
+        if (
+            flightNumbers.length != carrierCodes.length ||
+            flightNumbers.length != arrivalAirports.length ||
+            flightNumbers.length != departureAirports.length
+        ) {
+            revert ArrayLengthMismatch();
+        }
+
+        for (uint256 i = 0; i < flightNumbers.length; i++) {
+            _validateString(flightNumbers[i]);
+            _validateString(carrierCodes[i]);
+            _validateString(arrivalAirports[i]);
+            _validateString(departureAirports[i]);
+
+            if (
+                isFlightSubscribed[msg.sender][flightNumbers[i]][
+                    carrierCodes[i]
+                ][arrivalAirports[i]][departureAirports[i]]
+            ) {
+                isFlightSubscribed[msg.sender][flightNumbers[i]][
+                    carrierCodes[i]
+                ][arrivalAirports[i]][departureAirports[i]] = false;
+
+                emit FlightUnsubscribed(
+                    msg.sender,
+                    flightNumbers[i],
+                    carrierCodes[i],
+                    arrivalAirports[i],
+                    departureAirports[i]
+                );
+            }
+        }
     }
 }
